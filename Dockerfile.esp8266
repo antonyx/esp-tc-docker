@@ -1,0 +1,61 @@
+FROM debian:buster-slim
+
+# xtensa toolchain url
+ARG TOOLCHAIN_TARBALL_URL=https://dl.espressif.com/dl/xtensa-lx106-elf-linux64-1.22.0-92-g8facf4c-5.2.0.tar.gz
+
+ARG RTOS_SDK_TAG=master
+ARG ARDUINO_SDK_TAG=8dd068eb40b4214f0ba81413d8888ae825e1d0f4
+
+ARG CMAKE_VERSION=3.5.2
+ARG TOOLS_PATH=/tools
+
+RUN mkdir ${TOOLS_PATH} && mkdir /build
+WORKDIR ${TOOLS_PATH}
+
+RUN set -ex && apt-get update && apt-get install -y \
+	ca-certificates tar bzip2 wget make git gperf sed bash help2man libtool libtool-bin \
+	autoconf automake libtool gcc g++ flex bison texinfo gawk ncurses-dev \
+	libffi-dev libssl-dev python python-dev python-setuptools python-pip python3 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ARG CMAKE_PATH=${TOOLS_PATH}/cmake-${CMAKE_VERSION}-Linux-x86_64
+RUN set -ex && \
+    wget -q https://cmake.org/files/v$(echo ${CMAKE_VERSION} | cut -d'.' -f1-2)/cmake-${CMAKE_VERSION}-Linux-x86_64.sh && \
+    chmod ugo+x ./cmake-${CMAKE_VERSION}-Linux-x86_64.sh && \
+    echo "y" | ./cmake-${CMAKE_VERSION}-Linux-x86_64.sh --prefix=${TOOLS_PATH} && \
+    rm cmake-${CMAKE_VERSION}-Linux-x86_64.sh
+
+ARG TOOLCHAIN_PATH=${TOOLS_PATH}/toolchain
+RUN set -ex && \
+    TOOLCHAIN_TARBALL_FILENAME=$(basename "${TOOLCHAIN_TARBALL_URL}") && \
+    wget -q ${TOOLCHAIN_TARBALL_URL} && \
+    tar -xvf ${TOOLCHAIN_TARBALL_FILENAME} && \
+    mv `tar -tf ${TOOLCHAIN_TARBALL_FILENAME} | head -1` ${TOOLCHAIN_PATH} && \
+    rm ${TOOLCHAIN_TARBALL_FILENAME}
+
+ARG IDF_PATH=${TOOLS_PATH}/ESP8266_RTOS_SDK
+RUN set -ex && git clone https://github.com/espressif/ESP8266_RTOS_SDK.git ${IDF_PATH} && \
+    cd ${IDF_PATH} && \
+    git checkout ${RTOS_SDK_TAG} && \
+    pip install --upgrade pip && \
+    pip install --upgrade setuptools && \
+    python -m pip install --user -r ${IDF_PATH}/requirements.txt && \
+    wget -P ${IDF_PATH}/components/esptool_py https://raw.githubusercontent.com/espressif/esp-idf/master/components/esptool_py/run_esptool.cmake
+
+ARG ARDUINO_PATH=${TOOLS_PATH}/esp8266
+RUN set -ex && git clone https://github.com/esp8266/Arduino ${ARDUINO_PATH} && \
+    cd ${ARDUINO_PATH} && \
+    git checkout ${ARDUINO_SDK_TAG} && \
+    git submodule update --init && \
+    cd ${ARDUINO_PATH}/tools && \
+    ./get.py
+
+RUN set -ex && cd ${ARDUINO_PATH}/tools/sdk/lwip/src && \
+    SDK_PATH=${ARDUINO_PATH}/tools/sdk TOOLS_PATH=${SDK_PATH}/../xtensa-lx106-elf/bin/xtensa-lx106-elf- make && \
+    make install && make clean
+
+ENV PATH="${CMAKE_PATH}/bin:${TOOLS_PATH}/toolchain/bin:${IDF_PATH}/tools:${PATH}"
+ENV IDF_PATH=${IDF_PATH}
+
+# Change workdir
+WORKDIR /build
